@@ -44,6 +44,12 @@ fn get_codec_definition() -> Vec<CfgDefinitionValue> {
         CfgDefinitionValue::new(
             "wincode",
             vec![
+                // Reenable wincode when
+                // ```overly complex generic constant
+                // consider moving this anonymous constant into a `const` function
+                // this operation may be supported in the future```
+                // Isn't an issue anymore. Latest broken version: 0.5.3
+                
                 // quote! { wincode::SchemaRead },
                 // quote! { wincode::SchemaWrite },
             ],
@@ -76,13 +82,12 @@ fn get_enum_definition() -> Vec<CfgDefinitionValue> {
         CfgDefinitionValue::new(
             "strum",
             vec![
-                // quote! { strum::EnumIter },
-                // quote! { strum::EnumCount },
-                // quote! { strum::AsRefStr },
-                // quote! { strum::Display },
-                // quote! { strum::IntoStaticStr },
+                // quote! { strum::EnumIter }, This can only be implemented when a type has default
+                quote! { strum::EnumCount },
+                quote! { strum::AsRefStr },
+                quote! { strum::IntoStaticStr },
                 // quote! { strum::VariantArray },
-                // quote! { strum::VariantNames },
+                quote! { strum::VariantNames },
             ],
             true,
             None,
@@ -197,12 +202,12 @@ fn apply_derive(
 /// Attribute macro to conditionally derive codec traits.
 ///
 /// Applies serialization/deserialization derives based on enabled features.
-/// Supports: `wincode`
-/// Optionally: `strum`, `enum_ext`
+/// Automatically chooses which features to potentially enable based on what the derive is used on.
+/// Optionally disableable: `wincode`, `bitcode`, `serde`, `strum`, `enum_ext`, `c_compatible`
 ///
 /// # Example
 /// ```ignore
-/// #[derive_codec(wincode = true, strum = false, enum_ext = true)]
+/// #[derive_codec(wincode = true, c_compatible = false, enum_ext = true)]
 /// pub struct MyData {
 ///     value: i32,
 /// }
@@ -212,21 +217,26 @@ pub fn derive_all(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(input as DeriveInput);
     let FlagList(mut flags) = parse_macro_input!(args as FlagList);
 
-    flags.extend([
-        ("serde".to_string(), true),
-        ("bitcode".to_string(), true),
-        ("zerocopy".to_string(), true),
-    ]);
+    let c_compatible =
+        flags.iter().find(|x| x.0.eq("c_compatible")).is_none_or(|x| x.1);
 
-    if item.generics.lt_token.is_none() {
-        flags.push(("wincode".to_string(), true));
-    } else {
-        flags.push(("wincode".to_string(), false));
+    let vals = ["serde", "bitcode", "zerocopy"];
+    for val in vals {
+        if !flags.iter().any(|x| x.0.eq(val)) {
+            flags.push((val.to_string(), true));
+        }
     }
-
+    if !flags.iter().any(|x| x.0.eq("wincode")) {
+        if item.generics.lt_token.is_none() {
+            flags.push(("wincode".to_string(), true));
+        } else {
+            flags.push(("wincode".to_string(), false));
+        }
+    }
     let mut cfg = get_codec_definition();
 
     if let syn::Data::Enum(data) = &item.data {
+        // println!("{:?}", flags);
         let mut pure = true;
         for variant in &data.variants {
             #[allow(clippy::equatable_if_let)] // `==` cannot be used here
@@ -263,10 +273,11 @@ pub fn derive_all(args: TokenStream, input: TokenStream) -> TokenStream {
     if let Some(err) = apply_derive(&mut item, &mut flags, cfg, false, false) {
         return err.into();
     }
-
-    item.attrs.push(syn::parse_quote! {
-        #[cfg_attr(feature = "c_compatible", repr(C))]
-    });
+    if c_compatible {
+        item.attrs.push(syn::parse_quote! {
+            #[cfg_attr(feature = "c_compatible", repr(C))]
+        });
+    }
     quote! { #item }.into()
 }
 /// Attribute macro to conditionally derive codec traits.
