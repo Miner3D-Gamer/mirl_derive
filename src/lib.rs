@@ -1,26 +1,36 @@
 //! Derive values for structs and enums
+// TODO: Add `read_only` flag to [`derive_all`]
 
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{DeriveInput, LitBool, Token, parse::Parse, parse_macro_input};
 
+#[derive(Debug, Clone, )]
 /// A definition of a configurably derivative value
 struct CfgDefinitionValue {
-    feature: &'static str,
-    streams: Vec<proc_macro2::TokenStream>,
-    is_derive: bool,
-    dependencies: Vec<&'static str>,
+    /// The feature name
+    pub feature: &'static str,
+    /// The derive parameter in quote! form
+    pub read_streams: Vec<proc_macro2::TokenStream>,
+    /// The derive parameter in quote! form
+    pub write_streams: Vec<proc_macro2::TokenStream>,
+    /// If it's a derive, else it'll be inputted raw
+    // "That's what he said"
+    pub is_derive: bool,
+    /// What dependencies are required
+    pub dependencies: Vec<&'static str>,
 }
 impl CfgDefinitionValue {
     fn new(
         feature: &'static str,
-        streams: Vec<proc_macro2::TokenStream>,
+        read_streams: Vec<proc_macro2::TokenStream>,
+        write_streams: Vec<proc_macro2::TokenStream>,
         is_derive: bool,
         dependencies: Option<Vec<&'static str>>,
     ) -> Self {
         Self {
             feature,
-            streams,
+            read_streams,write_streams,
             is_derive,
             dependencies: dependencies.unwrap_or_default(),
         }
@@ -31,26 +41,30 @@ fn get_codec_definition() -> Vec<CfgDefinitionValue> {
     vec![
         CfgDefinitionValue::new(
             "serde",
-            vec![quote! { serde::Serialize }, quote! { serde::Deserialize }],
+            vec![quote! { serde::Serialize }],
+            vec![quote! { serde::Deserialize }],
             true,
             None,
         ),
         CfgDefinitionValue::new(
             "bitcode",
-            vec![quote! { bitcode::Encode }, quote! { bitcode::Decode }],
+            vec![quote! { bitcode::Encode }],
+            vec![ quote! { bitcode::Decode }],
             true,
             None,
         ),
         CfgDefinitionValue::new(
             "wincode",
-            vec![
                 // Reenable wincode when
                 // ```overly complex generic constant
                 // consider moving this anonymous constant into a `const` function
                 // this operation may be supported in the future```
                 // Isn't an issue anymore. Latest broken version: 0.5.3
-                
+
+            vec![
                 // quote! { wincode::SchemaRead },
+            ],
+            vec![
                 // quote! { wincode::SchemaWrite },
             ],
             true,
@@ -58,6 +72,7 @@ fn get_codec_definition() -> Vec<CfgDefinitionValue> {
         ),
         CfgDefinitionValue::new(
             "compactly",
+            vec![],
             vec![
                 quote! { compactly::v1::Encode },
                 quote! { compactly::v2::Encode },
@@ -68,8 +83,10 @@ fn get_codec_definition() -> Vec<CfgDefinitionValue> {
         CfgDefinitionValue::new(
             "zerocopy",
             vec![
-                quote! { zerocopy::TryFromBytes },
                 quote! { zerocopy::IntoBytes },
+            ],
+            vec![
+                quote! { zerocopy::TryFromBytes },
             ],
             true,
             Some(vec!["c_compatible"]),
@@ -89,10 +106,12 @@ fn get_enum_definition() -> Vec<CfgDefinitionValue> {
                 // quote! { strum::VariantArray },
                 quote! { strum::VariantNames },
             ],
+            vec![
+            ],
             true,
             None,
         ),
-        CfgDefinitionValue::new("enum_ext", vec![], false, None),
+        CfgDefinitionValue::new("enum_ext", vec![], vec![], false, None),
     ]
 }
 fn apply_derive(
@@ -101,6 +120,7 @@ fn apply_derive(
     derive_config: Vec<CfgDefinitionValue>,
     allow_unused_config: bool,
     allow_unused_flag: bool,
+    read_only: bool
 ) -> Option<proc_macro2::TokenStream> {
     let mut codec_derives = derive_config;
     let mut unused_flags = Vec::with_capacity(flags.len());
@@ -116,41 +136,34 @@ fn apply_derive(
         let info =
             unsafe { vec_unchecked_swap_remove(&mut codec_derives, idx) };
 
+        if !flag.1 {
+            continue;
+        }
         if info.is_derive {
             // Add all derives as separate #[derive(...)] attributes
-            for derive in info.streams {
-                let mut features: Vec<&str> = vec![info.feature];
-                features.extend(info.dependencies.clone());
-                let feature = format!(
-                    "all({})",
-                    features
-                        .iter()
-                        .map(|x| format!("feature = \"{x}\""))
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                );
-                let Ok(stream): Result<
-                    proc_macro2::TokenStream,
-                    proc_macro2::LexError,
-                > = feature.parse() else {
-                    panic!(
-                        "Error at {}:{}:{} \nSome feature was not defined properly: {}",
-                        file!(),
-                        line!(),
-                        column!(),
-                        feature
-                    )
-                };
-                item.attrs.push(syn::parse_quote! {
-                    #[cfg_attr(#stream, derive(#derive))]
-                });
+            for derive in &info.read_streams {
+                add_derive(item, info.feature, &info.dependencies, derive);
+            }
+            if !read_only{
+            for derive in &info.write_streams {
+                add_derive(item, info.feature, &info.dependencies, derive);
+            }
             }
         } else {
-            for derive in info.streams {
+            for derive in info.read_streams {
                 let feature = info.feature;
                 item.attrs.push(syn::parse_quote! {
                     #[cfg_attr(feature = #feature, #derive)]
                 });
+            }
+            if !read_only{
+                
+            for derive in info.write_streams {
+                let feature = info.feature;
+                item.attrs.push(syn::parse_quote! {
+                    #[cfg_attr(feature = #feature, #derive)]
+                });
+            }
             }
         }
     }
@@ -158,11 +171,28 @@ fn apply_derive(
         if allow_unused_flag {
             *flags = unused_flags;
         } else {
+            if codec_derives.is_empty() {
+                return Some(
+                    syn::Error::new_spanned(
+                        &item,
+                        format!(
+                            "Unknown macro input: {}. All expected fields have been defined. Consider removing it?",
+                            unused_flags
+                                .iter()
+                                .map(|x| format!("`{}` ({})", x.0, x.1))
+                                .collect::<Vec<String>>()
+                                .join(", "),
+                            
+                        ),
+                    )
+                    .to_compile_error(),
+                );
+            }
             return Some(
                 syn::Error::new_spanned(
                     &item,
                     format!(
-                        "Unknown fields: {}. Expected one of: {}",
+                        "Unknown macro input: {}. Expected one of: {}",
                         unused_flags
                             .iter()
                             .map(|x| format!("`{}` ({})", x.0, x.1))
@@ -199,15 +229,60 @@ fn apply_derive(
         None
     }
 }
+
+fn add_derive(
+    item: &mut DeriveInput,name: &'static str, dependencies: &[&'static str], derive: &proc_macro2::TokenStream){
+    
+                let mut features: Vec<&str> = vec![name];
+                features.extend_from_slice(dependencies);
+                let feature = format!(
+                    "all({})",
+                    features
+                        .iter()
+                        .map(|x| format!("feature = \"{x}\""))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                );
+                let Ok(stream): Result<
+                    proc_macro2::TokenStream,
+                    proc_macro2::LexError,
+                > = feature.parse() else {
+                    panic!(
+                        "Error at {}:{}:{} \nSome feature was not defined properly: {}",
+                        file!(),
+                        line!(),
+                        column!(),
+                        feature
+                    )
+                };
+                item.attrs.push(syn::parse_quote! {
+                    #[cfg_attr(#stream, derive(#derive))]
+                });
+}
+
+fn add_flag_to_vec(vec: &mut Vec<(String, bool)>, flag: &str, bool: bool) {
+    if !vec.iter().any(|x| x.0.eq(flag)) {
+        vec.push((flag.to_string(), bool));
+    }
+}
+
 /// Attribute macro to conditionally derive codec traits.
 ///
+/// ---
+/// 
 /// Applies serialization/deserialization derives based on enabled features.
-/// Automatically chooses which features to potentially enable based on what the derive is used on.
-/// Optionally disableable: `wincode`, `bitcode`, `serde`, `strum`, `enum_ext`, `c_compatible`
+/// 
+/// Automatically chooses which features to enable/disable based on what the item the derive is used on.
+/// 
+/// Optionally disableable: `wincode`, `bitcode`, `serde`, `strum`, `enum_ext`, `c_compatible`, `zerocopy`, and `compactly`
 ///
+/// ### Warning: 
+/// `wincode` has been temporarily disabled until the author fixes their `overly complex generic constant` problem. Please use `bitcode` in the meanwhile.
+/// 
 /// # Example
-/// ```ignore
-/// #[derive_codec(wincode = true, c_compatible = false, enum_ext = true)]
+/// If `wincode`, `serde`, and `zerocopy` were to give issues, you could just disable them
+/// ```
+/// #[derive_all(wincode = false, c_compatible = false, zerocopy = false)]
 /// pub struct MyData {
 ///     value: i32,
 /// }
@@ -222,17 +297,16 @@ pub fn derive_all(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let vals = ["serde", "bitcode", "zerocopy"];
     for val in vals {
-        if !flags.iter().any(|x| x.0.eq(val)) {
-            flags.push((val.to_string(), true));
-        }
+        add_flag_to_vec(&mut flags, val, true);
     }
-    if !flags.iter().any(|x| x.0.eq("wincode")) {
-        if item.generics.lt_token.is_none() {
-            flags.push(("wincode".to_string(), true));
-        } else {
-            flags.push(("wincode".to_string(), false));
-        }
-    }
+    add_flag_to_vec(&mut flags, "wincode", item.generics.lt_token.is_none());
+    // if !flags.iter().any(|x| x.0.eq("wincode")) {
+    //     if item.generics.lt_token.is_none() {
+    //         flags.push(("wincode".to_string(), true));
+    //     } else {
+    //         flags.push(("wincode".to_string(), false));
+    //     }
+    // }
     let mut cfg = get_codec_definition();
 
     if let syn::Data::Enum(data) = &item.data {
@@ -249,9 +323,7 @@ pub fn derive_all(args: TokenStream, input: TokenStream) -> TokenStream {
 
         if pure {
             for k in keys {
-                if !flags.iter().any(|x| x.0 == k) {
-                    flags.push((k.to_string(), true));
-                }
+                add_flag_to_vec(&mut flags, k, true);
             }
         } else {
             flags.retain(|x| !keys.contains(&x.0.as_str()));
@@ -259,18 +331,23 @@ pub fn derive_all(args: TokenStream, input: TokenStream) -> TokenStream {
                 flags.push((k.to_string(), false));
             }
         }
-
-        flags.push(("compactly".to_string(), false));
+        add_flag_to_vec(&mut flags, "compactly", false);
         cfg.extend(get_enum_definition());
     } else {
-        flags.push(("compactly".to_string(), true));
+        add_flag_to_vec(&mut flags, "compactly", true);
     }
+    add_flag_to_vec(&mut flags, "read_only",false);
     // println!(
     //     "----\n{:#?} vs {:?}",
     //     flags,
     //     cfg.iter().map(|x| x.feature).collect::<Vec<&str>>()
-    // );
-    if let Some(err) = apply_derive(&mut item, &mut flags, cfg, false, false) {
+    // );   
+
+    // TODO: Check if read_only was defined instead of adding it.
+    // Safety: As we are adding read_only when it isn't defined, it will always exist
+    let read_only_pos = unsafe{flags.iter().position(|x| x.0 == "read_only" ).unwrap_unchecked()};
+    let read_only = flags.remove(read_only_pos).1;
+    if let Some(err) = apply_derive(&mut item, &mut flags, cfg, false, false,read_only) {
         return err.into();
     }
     if c_compatible {
@@ -301,7 +378,7 @@ pub fn derive_possible_configured(
     let mut item = parse_macro_input!(input as DeriveInput);
     let FlagList(mut flags) = parse_macro_input!(args as FlagList);
     if let Some(err) =
-        apply_derive(&mut item, &mut flags, get_codec_definition(), false, true)
+        apply_derive(&mut item, &mut flags, get_codec_definition(), false, true, false)
     {
         return err.into();
     }
@@ -311,7 +388,7 @@ pub fn derive_possible_configured(
             &mut flags,
             get_enum_definition(),
             false,
-            false,
+            false,false
         )
     {
         return err.into();
@@ -340,7 +417,7 @@ pub fn derive_codec(args: TokenStream, input: TokenStream) -> TokenStream {
         &mut flags,
         get_codec_definition(),
         false,
-        false,
+        false,false
     ) {
         return err.into();
     }
@@ -388,7 +465,7 @@ pub fn derive_better_enum(
     let mut item = parse_macro_input!(input as DeriveInput);
     let FlagList(mut flags) = parse_macro_input!(args as FlagList);
     if let Some(err) =
-        apply_derive(&mut item, &mut flags, get_enum_definition(), false, false)
+        apply_derive(&mut item, &mut flags, get_enum_definition(), false, false,false)
     {
         return err.into();
     }
