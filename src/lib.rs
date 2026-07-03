@@ -301,7 +301,7 @@ pub fn derive_all(args: TokenStream, input: TokenStream) -> TokenStream {
     }
     add_flag_to_vec(&mut flags, "wincode", item.generics.lt_token.is_none());
     // if !flags.iter().any(|x| x.0.eq("wincode")) {
-    //     if item.generics.lt_token.is_none() {
+    //     if item.generics.lt_token.is_None {
     //         flags.push(("wincode".to_string(), true));
     //     } else {
     //         flags.push(("wincode".to_string(), false));
