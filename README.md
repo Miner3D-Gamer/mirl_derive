@@ -10,7 +10,7 @@
 
 The macro `#[mirl_derive::derive_all]`, see its documentation for more information.
 
-The code above any struct/enum:
+How to apply the macro on structs/enums:
 
 ```rust
 #[mirl_derive::derive_all]
@@ -48,15 +48,15 @@ enum_ext = ["dep:enum_ext"]
 mirl_derive = {version = "0.0.0-alpha"}
 
 # Codec
-compactly = {version = "0.1.6", optional = true}
-serde = {version = ">=1.0", optional = true, features = ["derive"]}
-bitcode = {version = "0.6.9", optional = true, features = ["derive"]}
-wincode = {version = "0.5.3", optional = true, features = ["derive"]}
-zerocopy = {version = "0.8.48", optional = true, features = ["float-nightly", "derive"]}
+compactly = {version = "0.1", optional = true}
+serde = {version = "1.0", optional = true, features = ["derive"]}
+bitcode = {version = "0.6", optional = true, features = ["derive"]}
+wincode = {version = "0.5", optional = true, features = ["derive"]}
+zerocopy = {version = "0.8", optional = true, features = ["float-nightly", "derive"]}
 
 # Enum functionality
-strum = {version = ">=0.28", optional = true, features = ["derive"]}
-enum_ext = {version = "0.6.0", optional = true}
+strum = {version = "0.28", optional = true, features = ["derive"]}
+enum_ext = {version = "0.6", optional = true}
 
 ```
 
