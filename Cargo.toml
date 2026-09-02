@@ -5,6 +5,11 @@ repository = "https://github.com/Miner3D-Gamer/mirl_derive"
 edition = "2024"
 license.workspace = true
 authors.workspace = true
+description = "A crate that tries to make derives less work by assuming all derives are desired on a struct/enum by default instead of None"
+readme = "README.md"
+categories = ["build-tools", "ffi", "no-std"]
+rust-version.workspace = true
+
 
 [lib]
 proc-macro = true
