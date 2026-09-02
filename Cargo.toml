@@ -7,7 +7,7 @@ license.workspace = true
 authors.workspace = true
 description = "A crate that tries to make derives less work by assuming all derives are desired on a struct/enum by default instead of None"
 readme = "README.md"
-categories = ["build-tools", "ffi", "no-std"]
+categories = ["development-tools"]
 rust-version.workspace = true
 
 
